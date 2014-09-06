@@ -1,0 +1,13 @@
+An experimental interpreter:
+
+Try this!
+
+>> a = 100
+Token: type=CONSTANT data=100
+>> b = 50
+Token: type=CONSTANT data=50
+>> c = (a+b)+(a*b)
+Token: type=CONSTANT data=5150
+>> d = a | b
+Token: type=CONSTANT data=118
+>> quit

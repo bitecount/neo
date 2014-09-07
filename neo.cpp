@@ -86,51 +86,212 @@ const char* error_codes[] =
 	"Parsing error"
 };
 
-typedef struct token
+typedef enum
 {
+	OBJECT_INTEGER = 0,
+	OBJECT_FLOAT,
+	OBJECT_STRING	
+} object_type_t;
+
+const char* object_type_strings[] =
+{
+	"Integer",
+	"Float",
+	"String"
+};
+
+typedef void* object_handle_t;
+
+class object
+{
+	public:
+		static object* create_object(int v);
+		static object* create_object(double v);
+		static object* create_object(const char* s);
+
+		static void object_reap(object* o);
+
+		void increment_refcount();
+		void decrement_refcount();
+
+		void print_object();
+		int get_object_count() { return object_count; }
+
+#define PROTOTYPE_OPERATOR_FUNCTION(op) \
+		friend object* operator op (object& lhs, object& rhs);
+
+		PROTOTYPE_OPERATOR_FUNCTION(+)
+		PROTOTYPE_OPERATOR_FUNCTION(-)
+		PROTOTYPE_OPERATOR_FUNCTION(*)
+		PROTOTYPE_OPERATOR_FUNCTION(/)
+		PROTOTYPE_OPERATOR_FUNCTION(%)
+		PROTOTYPE_OPERATOR_FUNCTION(&)
+		PROTOTYPE_OPERATOR_FUNCTION(|)
+		PROTOTYPE_OPERATOR_FUNCTION(^)
+
+#undef  PROTOTYPE_OPERATOR_FUNCTION
+
+		friend object* operator ~ (object& rhs);
+	private:
+		object_type_t type;
+		union {
+			object_handle_t handle;
+			int intvalue;
+			double floatvalue;
+		};
+		int refcount;
+
+		static int object_count;
+
+		object(int v) : type(OBJECT_INTEGER), intvalue(v), refcount(0) { ++object_count; }
+		object(double v) : type(OBJECT_FLOAT), floatvalue(v), refcount(0) { ++object_count; }
+		object(const char* s) : type(OBJECT_STRING), refcount(0)
+		{
+			this->handle = new char[ strlen(s) + 1 ];
+			strcpy((char*) this->handle, s);
+			++object_count;
+		}
+
+		~object() {}
+};
+
+typedef object* object_pointer_t;
+
+//Initialize static members of the class object.
+int object::object_count = 0;
+
+object* object::create_object(int v)
+{
+	object* a = new object(v);
+	printf("object creation(%p): i=%d\n", a, v);
+	return a;
+}
+
+object* object::create_object(double v)
+{
+	return new object(v);
+}
+
+object* object::create_object(const char* s)
+{
+	return new object(s);
+}
+
+void object::increment_refcount()
+{
+	++refcount;
+}
+
+void object::decrement_refcount()
+{
+	if(--refcount == 0)
+		object_reap(this);
+}
+
+void object::object_reap(object* o)
+{
+	if(o->refcount == 0)
+	{
+		printf("object deletion(%p)\n", o);
+		if(o->type == OBJECT_STRING)
+			delete [] ((char*) o->handle);
+		delete o;
+	}
+}
+
+void object::print_object()
+{
+	printf("Object @%p\n", this);
+	printf("Type = %s Reference count = %d", object_type_strings[this->type], this->refcount);
+	switch(this->type)
+	{
+		case OBJECT_INTEGER: printf("Value = %d", this->intvalue); break;
+		case OBJECT_FLOAT:   printf("Value = %.2f", this->floatvalue); break;
+		case OBJECT_STRING:  printf("Value = '%s'", (const char*)this->handle); break;
+	}
+	printf("\n");
+}
+
+#define OPERATOR_FUNCTION(op) \
+object* operator op (object& lhs, object& rhs) \
+{ \
+	object* result = NULL; \
+	if(lhs.type == OBJECT_INTEGER && rhs.type == OBJECT_INTEGER) \
+	{ \
+		result = object::create_object(lhs.intvalue op rhs.intvalue); \
+	} \
+	return result; \
+}
+
+OPERATOR_FUNCTION(+)
+OPERATOR_FUNCTION(-)
+OPERATOR_FUNCTION(*)
+OPERATOR_FUNCTION(/)
+OPERATOR_FUNCTION(%)
+OPERATOR_FUNCTION(&)
+OPERATOR_FUNCTION(|)
+OPERATOR_FUNCTION(^)
+
+#undef OPERATOR_FUNCTION
+
+object* operator ~ (object& rhs)
+{
+	object* result = NULL;
+	if(rhs.type == OBJECT_INTEGER)
+	{
+		result = object::create_object(~rhs.intvalue);
+	}
+	return result;
+}
+
+class token
+{
+	public:
 #define VARIABLE_NAME_LENGTH (31)
 	operator_t type;
 	union {
-		int data; //data is valid only for OP_CONSTANT and varname is valid only for OP_VARIABLE.
-		char varname[VARIABLE_NAME_LENGTH + 1]; 
-		int error_code; //is valid only for OP_INVALID.
+		object_pointer_t data; 			//valid only for OP_CONSTANT.
+		char varname[VARIABLE_NAME_LENGTH + 1]; //valid only for OP_VARIABLE.
+		int error_code; 			//valid only for OP_INVALID.
 	};
-	const char* str;
+
+	token() { data = NULL; }
 #undef VARIABLE_NAME_LENGTH
-} token_t;
+};
+typedef token token_t;
 
 void print_token(const token_t& t)
 {
 	switch(t.type)
 	{
 		case OP_CONSTANT:
-			printf("Token: type=%s data=%d\n", t.str, t.data);
+			printf("Token: type=%s data=%p\n", operator_strings[t.type], t.data);
 			break;
 		case OP_VARIABLE:
-			printf("Token: type=%s varname=%s\n", t.str, t.varname);
+			printf("Token: type=%s varname=%s\n", operator_strings[t.type], t.varname);
 			break;
 		case OP_INVALID:
-			printf("Token: type=%s error=%s\n", t.str, error_codes[t.error_code]);
+			printf("Token: type=%s error=%s\n", operator_strings[t.type], error_codes[t.error_code]);
 			break;
 		default:
-			printf("Token: type=%s\n", t.str);
+			printf("Token: type=%s\n", operator_strings[t.type]);
 	} 
 }
 
-class SymbolTable
+class symboltable
 {
 	public:
-		bool get_symbol(const string& var, token_t& value);
-		void set_symbol(const string& var, token_t value);
+		bool get_symbol(const string& var, object_pointer_t& value);
+		void set_symbol(const string& var, object_pointer_t value);
 
 		void print_all_symbols();
 	private:
-		map < string, token_t > st;
+		map < string, object_pointer_t > st;
 };
 
-bool SymbolTable::get_symbol(const string& var, token_t& value)
+bool symboltable::get_symbol(const string& var, object_pointer_t& value)
 {
-	map < string, token_t > :: iterator i = st.find(var);
+	map < string, object_pointer_t > :: iterator i = st.find(var);
 	if(i == st.end())
 		return false;
 	else
@@ -140,27 +301,22 @@ bool SymbolTable::get_symbol(const string& var, token_t& value)
 	}
 }
 
-void SymbolTable::set_symbol(const string& var, token_t value)
+void symboltable::set_symbol(const string& var, object_pointer_t value)
 {
 	st[var] = value;
 }
 
-void SymbolTable::print_all_symbols()
+void symboltable::print_all_symbols()
 {
-	map < string, token_t > :: iterator i = st.begin(), j = st.end();	
+	map < string, object_pointer_t > :: iterator i = st.begin(), j = st.end();	
 
 	printf("Symbol Table <Begin>\n");
 	while(i != j)
 	{
-		printf("%s = %d\n", (*i).first.c_str(), (*i).second.data);
+		printf("%s = %p\n", (*i).first.c_str(), (*i).second);
 		++i;
 	}
 	printf("Symbol Table <End>\n");
-}
-
-inline void set_operator_string(token_t* t)
-{
-	t->str = operator_strings[t->type];
 }
 
 /*
@@ -171,7 +327,6 @@ const char* getnext_token(const char* istream, token_t* t)
 {
 	if(istream == NULL) return NULL;
 	t->type = OP_EOF;
-	set_operator_string(t);
 
 	//Skip white space
 	while(*istream != '\0' && (*istream == ' ' || *istream == '\n' || *istream == '\t'))
@@ -179,7 +334,7 @@ const char* getnext_token(const char* istream, token_t* t)
 	if(*istream == '\0') return NULL;
 
 	t->type = OP_INVALID;
-	t->data = ERROR_PARSING_ERROR;
+	t->error_code = ERROR_PARSING_ERROR;
 	switch(*istream)
 	{
 		case '+' : t->type = OP_ADD; break;
@@ -216,7 +371,7 @@ const char* getnext_token(const char* istream, token_t* t)
 			accumulate = (accumulate * 10) + (*r - '0');
 			r++;
 		}	
-		t->data = (negative ? -accumulate : accumulate);
+		t->data = object::create_object(negative ? -accumulate : accumulate);
 		istream = --r;
 	}
 skip_reading_literal:
@@ -233,8 +388,6 @@ skip_reading_literal:
 		t->varname[i] = '\0';
 		istream = --r;
 	}
-
-	set_operator_string(t);
 	
 	//Consume exactly one token from istream and return a pointer from where the next token starts.
 	return ++istream;
@@ -243,19 +396,19 @@ skip_reading_literal:
 /*
 Evaluate the well formed postfix expression in the vector v, and populate the result in 'result'.
 */
-token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolTable& st)
+token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symboltable& st)
 {
-#define DO_VARIABLE_LOOKUP(token) do { \
+#define GET_OBJECT_POINTER(token, object_pointer, reporterror) do { \
 	if(token.type == OP_VARIABLE) \
 	{ \
-		token_t newtoken; \
-		if(!st.get_symbol(string(token.varname), newtoken)) \
+		if(!st.get_symbol(string(token.varname), object_pointer) && reporterror) \
 		{ \
 			err.error_code = ERROR_UNDEFINED_VARIABLE; \
 			return err; \
 		} \
-		token = newtoken; \
 	} \
+	else if(token.type == OP_CONSTANT) \
+		object_pointer = token.data; \
 } while(0)
 
 #define RETURN_IF_EMPTY do { \
@@ -268,7 +421,6 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolT
 
 	token_t err;
 	err.type = OP_INVALID;
-	set_operator_string(&err);
 
 	for(int i = 0; i < v.size(); ++i)
 	{
@@ -282,12 +434,17 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolT
 				RETURN_IF_EMPTY;
 				token_t op = s.top();
 				s.pop();
-				DO_VARIABLE_LOOKUP(op);
+				object_pointer_t p = NULL, r;
+				GET_OBJECT_POINTER(op, p, true);
 				switch(v[i].type)
 				{
-					case OP_BITWISE_NOT: op.data = ~op.data; break;
+					case OP_BITWISE_NOT: r = ~(*p); break;
 				}
-				s.push(op);
+				token_t result;
+				result.type = OP_CONSTANT;
+				result.data = r;
+				s.push(result);
+				if(op.type == OP_CONSTANT) object::object_reap(p);
 				continue;
 			}
 
@@ -299,21 +456,26 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolT
 			token_t op1 = s.top();
 			s.pop();
 			
-			//Lookup op1 and op2. If operator is OP_ASSIGN, then op1 should be a variable and shouldn't be looked up.
-			if(v[i].type != OP_ASSIGN)
-				DO_VARIABLE_LOOKUP(op1);
-			DO_VARIABLE_LOOKUP(op2);
+			object_pointer_t p1 = NULL, p2 = NULL, r = NULL;
+
+			//For assignment op1 need not already be a defined variable.
+			if(v[i].type == OP_ASSIGN)
+				GET_OBJECT_POINTER(op1, p1, false);
+			else
+				GET_OBJECT_POINTER(op1, p1, true);
+
+			GET_OBJECT_POINTER(op2, p2, true);
 
 			switch(v[i].type)
 			{
-				case OP_ADD: op1.data += op2.data; break;
-				case OP_SUBTRACT: op1.data -= op2.data; break;
-				case OP_MULTIPLY: op1.data *= op2.data; break;
-				case OP_DIVIDE: op1.data /= op2.data; break;
-				case OP_MODULO: op1.data %= op2.data; break;
-				case OP_BITWISE_AND: op1.data &= op2.data; break;
-				case OP_BITWISE_OR: op1.data |= op2.data; break;
-				case OP_BITWISE_XOR: op1.data ^= op2.data; break;
+				case OP_ADD: 		r = *p1 + *p2 ; break;
+				case OP_SUBTRACT: 	r = *p1 - *p2 ; break;
+				case OP_MULTIPLY: 	r = *p1 * *p2 ; break;
+				case OP_DIVIDE: 	r = *p1 / *p2 ; break;
+				case OP_MODULO: 	r = *p1 % *p2 ; break;
+				case OP_BITWISE_AND: 	r = *p1 & *p2 ; break;
+				case OP_BITWISE_OR: 	r = *p1 | *p2 ; break;
+				case OP_BITWISE_XOR: 	r = *p1 ^ *p2 ; break;
 				case OP_ASSIGN:
 				//op1 should be a variable, otherwise generate an error.
 				if(op1.type != OP_VARIABLE)
@@ -322,9 +484,22 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolT
 					return err;
 				}
 				string lvalue(op1.varname);
-				st.set_symbol(lvalue, op2);
+				st.set_symbol(lvalue, p2);
+				p2->increment_refcount();
+				if(p1) p1->decrement_refcount();
+				r = p2;
 			}
-			s.push(op1);
+			token_t result;
+			result.type = OP_CONSTANT;
+			result.data = r;
+			s.push(result);
+
+			//If objects used in the expression are constants, we can release them.
+			if(v[i].type != OP_ASSIGN)
+			{
+				if(op1.type == OP_CONSTANT) object::object_reap(p1);
+				if(op2.type == OP_CONSTANT) object::object_reap(p2);
+			}
 		}
 		else
 		{
@@ -338,12 +513,12 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, SymbolT
 	RETURN_IF_EMPTY;
 	token_t res = s.top();
 	s.pop();
-	if(res.type == OP_VARIABLE)
-		DO_VARIABLE_LOOKUP(res);
+	object_pointer_t p;
+	GET_OBJECT_POINTER(res, p, true);
 	return res;
 
 #undef POP_AND_RETURN_ON_ERROR
-#undef DO_VARIABLE_LOOKUP
+#undef GET_OBJECT_POINTER
 }
 
 /*
@@ -389,7 +564,7 @@ int is_higher_priority(operator_t x, operator_t y)
 /*
 Evaluate the infix expression pointed by p.
 */
-token_t evaluate_infix(const char* p, SymbolTable& st)
+token_t evaluate_infix(const char* p, symboltable& st)
 {
 #define POP_ALL do { \
 	while(!s.empty()) \
@@ -479,7 +654,7 @@ evaluate_expression:
 int main()
 {
 	char buffer[128];
-	SymbolTable st;
+	symboltable st;
 
 	printf(">> ");
 	while(gets(buffer))

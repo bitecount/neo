@@ -162,9 +162,7 @@ int object::object_count = 0;
 
 object* object::create_object(int v)
 {
-	object* a = new object(v);
-	printf("object creation(%p): i=%d\n", a, v);
-	return a;
+	return new object(v);
 }
 
 object* object::create_object(double v)
@@ -192,7 +190,6 @@ void object::object_reap(object* o)
 {
 	if(o->refcount == 0)
 	{
-		printf("object deletion(%p)\n", o);
 		if(o->type == OBJECT_STRING)
 			delete [] ((char*) o->handle);
 		delete o;
@@ -404,7 +401,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		if(!st.get_symbol(string(token.varname), object_pointer) && reporterror) \
 		{ \
 			err.error_code = ERROR_UNDEFINED_VARIABLE; \
-			return err; \
+			goto cleanup_and_return_error; \
 		} \
 	} \
 	else if(token.type == OP_CONSTANT) \
@@ -415,14 +412,15 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 	if(s.empty()) \
 	{ \
 		err.error_code = ERROR_UNEXPECTED_END_OF_EXPRESSION; \
-		return err; \
+		goto cleanup_and_return_error; \
 	} \
 } while(0)
 
 	token_t err;
 	err.type = OP_INVALID;
 
-	for(int i = 0; i < v.size(); ++i)
+	int i, j;
+	for(i = 0; i < v.size(); ++i)
 	{
 		if(v[i].type == OP_CONSTANT || v[i].type == OP_VARIABLE)
 			s.push(v[i]);
@@ -481,7 +479,8 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 				if(op1.type != OP_VARIABLE)
 				{
 					err.error_code = ERROR_ASSIGNMENT_TO_CONSTANT;
-					return err;
+					s.push(op1); s.push(op2);			
+					goto cleanup_and_return_error;
 				}
 				string lvalue(op1.varname);
 				st.set_symbol(lvalue, p2);
@@ -504,18 +503,40 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		else
 		{
 			err.error_code = ERROR_BAD_EXPRESSION;
-			return err;
+			goto cleanup_and_return_error;
 		}
+		j = i; //Processing is complete upto j. In case of error in next iteration, the cleanup code examines the vector from j.
 	}
 	
-	//The evaluation is done. If the stack is empty, report an error. Otherwise if it contains a variable name
-	//do a lookup.
-	RETURN_IF_EMPTY;
-	token_t res = s.top();
-	s.pop();
-	object_pointer_t p;
-	GET_OBJECT_POINTER(res, p, true);
-	return res;
+	//The stack should have had exactly one element after completion of evaluation.
+	if(s.size() != 1)
+		err.error_code = ERROR_BAD_EXPRESSION;
+	else
+		err.type = OP_EOF; //No errors detected during evaluation.
+	
+cleanup_and_return_error:
+	for( ++j ; j < v.size(); ++j)
+	{
+		if(v[j].type == OP_CONSTANT)
+		{
+			object_pointer_t p = NULL;
+			GET_OBJECT_POINTER(v[j], p, true);
+			object::object_reap(p);
+		}
+	}
+	while(!s.empty())
+	{
+		token_t t = s.top();
+		s.pop();
+		if(t.type == OP_CONSTANT)
+		{
+			object_pointer_t p = NULL;
+			GET_OBJECT_POINTER(t, p, true);
+			object::object_reap(p);
+		}
+	}
+
+	return err;
 
 #undef POP_AND_RETURN_ON_ERROR
 #undef GET_OBJECT_POINTER
@@ -651,20 +672,22 @@ evaluate_expression:
 #undef POP_ALL
 }
 
+const char prompt[] = "neo] ";
+
 int main()
 {
 	char buffer[128];
 	symboltable st;
 
-	printf(">> ");
+	printf("%s", prompt);
 	while(gets(buffer))
 	{
 		if(!strcmp(buffer, "quit"))
 			break;
 		
 		token_t t = evaluate_infix(buffer, st);		
-		print_token(t);
-		printf(">> ");
+		//print_token(t);
+		printf("%s", prompt);
 	}
 	return 0;
 }

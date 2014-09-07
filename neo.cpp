@@ -22,7 +22,7 @@ typedef enum
 	OP_BITWISE_XOR = 8,
 	OP_BITWISE_NOT = 9,
 
-	OP_CONSTANT = 10,
+	OP_OBJECT = 10,
 	OP_VARIABLE = 11,
 
 	OP_OPEN_SCOPE = 12,
@@ -143,6 +143,8 @@ class object
 
 		static int object_count;
 
+		object() : refcount(0) { ++object_count; }
+
 		object(int v) : type(OBJECT_INTEGER), intvalue(v), refcount(0) { ++object_count; }
 		object(double v) : type(OBJECT_FLOAT), floatvalue(v), refcount(0) { ++object_count; }
 		object(const char* s) : type(OBJECT_STRING), refcount(0)
@@ -198,13 +200,13 @@ void object::object_reap(object* o)
 
 void object::print_object()
 {
-	printf("Object @%p\n", this);
-	printf("Type = %s Reference count = %d", object_type_strings[this->type], this->refcount);
+	printf("object @%p\n", this);
+	printf("type = %s reference_count = %d ", object_type_strings[this->type], this->refcount);
 	switch(this->type)
 	{
-		case OBJECT_INTEGER: printf("Value = %d", this->intvalue); break;
-		case OBJECT_FLOAT:   printf("Value = %.2f", this->floatvalue); break;
-		case OBJECT_STRING:  printf("Value = '%s'", (const char*)this->handle); break;
+		case OBJECT_INTEGER: printf("value = %d", this->intvalue); break;
+		case OBJECT_FLOAT:   printf("value = %.2f", this->floatvalue); break;
+		case OBJECT_STRING:  printf("value = '%s' length=%ld", (const char*)this->handle, strlen((const char*)this->handle)); break;
 	}
 	printf("\n");
 }
@@ -220,7 +222,23 @@ object* operator op (object& lhs, object& rhs) \
 	return result; \
 }
 
-OPERATOR_FUNCTION(+)
+object* operator + (object& lhs, object& rhs)
+{
+	object* result = NULL;
+	if(lhs.type == OBJECT_INTEGER && rhs.type == OBJECT_INTEGER)
+		result = object::create_object(lhs.intvalue + rhs.intvalue);
+	else if(lhs.type == OBJECT_STRING && rhs.type == OBJECT_STRING)
+	{
+		//For efficiency, create the object using private constructor and set up type and handle.
+		result = new object();
+		result->type = OBJECT_STRING;
+		result->handle = new char [strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1];
+		strcpy((char*) result->handle, (const char*)lhs.handle);
+		strcpy(((char*) result->handle) + strlen((const char*)result->handle), (const char*)rhs.handle);
+	}
+	return result;	
+}
+
 OPERATOR_FUNCTION(-)
 OPERATOR_FUNCTION(*)
 OPERATOR_FUNCTION(/)
@@ -247,7 +265,7 @@ class token
 #define VARIABLE_NAME_LENGTH (31)
 	operator_t type;
 	union {
-		object_pointer_t data; 			//valid only for OP_CONSTANT.
+		object_pointer_t data; 			//valid only for OP_OBJECT.
 		char varname[VARIABLE_NAME_LENGTH + 1]; //valid only for OP_VARIABLE.
 		int error_code; 			//valid only for OP_INVALID.
 	};
@@ -261,17 +279,17 @@ void print_token(const token_t& t)
 {
 	switch(t.type)
 	{
-		case OP_CONSTANT:
-			printf("Token: type=%s data=%p\n", operator_strings[t.type], t.data);
+		case OP_OBJECT:
+			printf("token: type=%s data=%p\n", operator_strings[t.type], t.data);
 			break;
 		case OP_VARIABLE:
-			printf("Token: type=%s varname=%s\n", operator_strings[t.type], t.varname);
+			printf("token: type=%s varname=%s\n", operator_strings[t.type], t.varname);
 			break;
 		case OP_INVALID:
-			printf("Token: type=%s error=%s\n", operator_strings[t.type], error_codes[t.error_code]);
+			printf("token: type=%s error=%s\n", operator_strings[t.type], error_codes[t.error_code]);
 			break;
 		default:
-			printf("Token: type=%s\n", operator_strings[t.type]);
+			printf("token: type=%s\n", operator_strings[t.type]);
 	} 
 }
 
@@ -307,13 +325,13 @@ void symboltable::print_all_symbols()
 {
 	map < string, object_pointer_t > :: iterator i = st.begin(), j = st.end();	
 
-	printf("Symbol Table <Begin>\n");
+	printf("symbol table <begin>\n");
 	while(i != j)
 	{
 		printf("%s = %p\n", (*i).first.c_str(), (*i).second);
 		++i;
 	}
-	printf("Symbol Table <End>\n");
+	printf("symbol Table <end>\n");
 }
 
 /*
@@ -325,13 +343,15 @@ const char* getnext_token(const char* istream, token_t* t)
 	if(istream == NULL) return NULL;
 	t->type = OP_EOF;
 
-	//Skip white space
+	//Skip white space.
 	while(*istream != '\0' && (*istream == ' ' || *istream == '\n' || *istream == '\t'))
 		++istream;
 	if(*istream == '\0') return NULL;
 
 	t->type = OP_INVALID;
 	t->error_code = ERROR_PARSING_ERROR;
+
+	//Look for operators.
 	switch(*istream)
 	{
 		case '+' : t->type = OP_ADD; break;
@@ -347,6 +367,8 @@ const char* getnext_token(const char* istream, token_t* t)
 		case '(' : t->type = OP_OPEN_SCOPE; break;
 		case ')' : t->type = OP_CLOSE_SCOPE; break;
 	}
+
+	//Look for an integer literal.
 	if((*istream >= '0' && *istream <= '9') || (*istream == '-'))
 	{
 		int accumulate = 0;
@@ -362,7 +384,7 @@ const char* getnext_token(const char* istream, token_t* t)
 			negative = true; 
 			++r;
 		}
-		t->type = OP_CONSTANT;
+		t->type = OP_OBJECT;
 		while(*r >= '0' && *r <= '9')
 		{
 			accumulate = (accumulate * 10) + (*r - '0');
@@ -371,7 +393,31 @@ const char* getnext_token(const char* istream, token_t* t)
 		t->data = object::create_object(negative ? -accumulate : accumulate);
 		istream = --r;
 	}
+
+	//Look for a string literal (enclosed in '').
+	if(*istream == '\'')
+	{
+		const char* r = istream + 1;
+		char buffer[64] = { 0 };
+		int k = 0;
+		while(*r != '\0' && *r != '\'')
+		{
+			buffer[k++] = *r;
+			++r;
+		}
+		if(*r == '\0')
+			goto skip_reading_literal;
+		else
+		{
+			buffer[k] = '\0';
+			t->type = OP_OBJECT;
+			t->data = object::create_object((const char*) buffer);
+			istream = r;
+		}
+	}
+	
 skip_reading_literal:
+	//Look for a variable name
 	if(*istream >= 'a' && *istream <= 'z')
 	{
 		const char* r = istream;
@@ -404,7 +450,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 			goto cleanup_and_return_error; \
 		} \
 	} \
-	else if(token.type == OP_CONSTANT) \
+	else if(token.type == OP_OBJECT) \
 		object_pointer = token.data; \
 } while(0)
 
@@ -422,7 +468,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 	int i, j;
 	for(i = 0; i < v.size(); ++i)
 	{
-		if(v[i].type == OP_CONSTANT || v[i].type == OP_VARIABLE)
+		if(v[i].type == OP_OBJECT || v[i].type == OP_VARIABLE)
 			s.push(v[i]);
 		else if(is_evaluation_operator(v[i].type))
 		{
@@ -439,10 +485,10 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 					case OP_BITWISE_NOT: r = ~(*p); break;
 				}
 				token_t result;
-				result.type = OP_CONSTANT;
+				result.type = OP_OBJECT;
 				result.data = r;
 				s.push(result);
-				if(op.type == OP_CONSTANT) object::object_reap(p);
+				if(op.type == OP_OBJECT) object::object_reap(p);
 				continue;
 			}
 
@@ -484,20 +530,20 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 				}
 				string lvalue(op1.varname);
 				st.set_symbol(lvalue, p2);
-				p2->increment_refcount();
+				if(p2) p2->increment_refcount();
 				if(p1) p1->decrement_refcount();
 				r = p2;
 			}
 			token_t result;
-			result.type = OP_CONSTANT;
+			result.type = OP_OBJECT;
 			result.data = r;
 			s.push(result);
 
 			//If objects used in the expression are constants, we can release them.
 			if(v[i].type != OP_ASSIGN)
 			{
-				if(op1.type == OP_CONSTANT) object::object_reap(p1);
-				if(op2.type == OP_CONSTANT) object::object_reap(p2);
+				if(op1.type == OP_OBJECT) object::object_reap(p1);
+				if(op2.type == OP_OBJECT) object::object_reap(p2);
 			}
 		}
 		else
@@ -512,12 +558,16 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 	if(s.size() != 1)
 		err.error_code = ERROR_BAD_EXPRESSION;
 	else
-		err.type = OP_EOF; //No errors detected during evaluation.
+	{
+		err = s.top(); //No errors detected during evaluation.
+		s.pop();
+		return err;
+	}
 	
 cleanup_and_return_error:
 	for( ++j ; j < v.size(); ++j)
 	{
-		if(v[j].type == OP_CONSTANT)
+		if(v[j].type == OP_OBJECT)
 		{
 			object_pointer_t p = NULL;
 			GET_OBJECT_POINTER(v[j], p, true);
@@ -528,7 +578,7 @@ cleanup_and_return_error:
 	{
 		token_t t = s.top();
 		s.pop();
-		if(t.type == OP_CONSTANT)
+		if(t.type == OP_OBJECT)
 		{
 			object_pointer_t p = NULL;
 			GET_OBJECT_POINTER(t, p, true);
@@ -633,7 +683,7 @@ token_t evaluate_infix(const char* p, symboltable& st)
 		
 		switch(t.type)
 		{
-			case OP_CONSTANT:
+			case OP_OBJECT:
 			case OP_VARIABLE:
 				v.push_back(t);
 				break;
@@ -685,8 +735,11 @@ int main()
 		if(!strcmp(buffer, "quit"))
 			break;
 		
-		token_t t = evaluate_infix(buffer, st);		
-		//print_token(t);
+		token_t t = evaluate_infix(buffer, st);
+		if(t.type == OP_OBJECT && t.data)		
+			t.data->print_object();
+		else
+			print_token(t);
 		printf("%s", prompt);
 	}
 	return 0;

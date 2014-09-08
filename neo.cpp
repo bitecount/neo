@@ -73,7 +73,8 @@ typedef enum
 	ERROR_ASSIGNMENT_TO_CONSTANT = 2,
 	ERROR_UNEXPECTED_END_OF_EXPRESSION = 3,
 	ERROR_BAD_EXPRESSION = 4,
-	ERROR_PARSING_ERROR = 5
+	ERROR_PARSING_ERROR = 5,
+	ERROR_UNDEFINED_OPERATOR = 6
 } error_type_t;
 
 const char* error_codes[] =
@@ -83,7 +84,8 @@ const char* error_codes[] =
 	"Assignment attempt to a constant",
 	"Unexpected end of expression",
 	"Improperly formed expression",
-	"Parsing error"
+	"Parsing error",
+	"Operator undefined"
 };
 
 typedef enum
@@ -110,6 +112,8 @@ class object
 		static object* create_object(const char* s);
 
 		static void object_reap(object* o);
+
+		static void debug_string(const object* o, char* buffer, int bufferlength);
 
 		void increment_refcount();
 		void decrement_refcount();
@@ -195,6 +199,21 @@ void object::object_reap(object* o)
 		if(o->type == OBJECT_STRING)
 			delete [] ((char*) o->handle);
 		delete o;
+	}
+}
+
+void object::debug_string(const object* o, char* buffer, int bufferlength)
+{
+	switch(o->type)
+	{
+		case OBJECT_STRING:
+		if(bufferlength >= (strlen((const char*) o->handle) + 1))
+			strcpy(buffer, (const char*) o->handle);
+		break;
+
+		case OBJECT_INTEGER:
+		sprintf(buffer, "%d", o->intvalue);
+		break;
 	}
 }
 
@@ -454,6 +473,14 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		object_pointer = token.data; \
 } while(0)
 
+#define RETURN_IF_NULL(x) do { \
+	if(x == NULL) \
+	{ \
+		err.error_code = ERROR_UNDEFINED_OPERATOR; \
+		goto cleanup_and_return_error; \
+	} \
+} while(0)
+
 #define RETURN_IF_EMPTY do { \
 	if(s.empty()) \
 	{ \
@@ -486,6 +513,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 				}
 				token_t result;
 				result.type = OP_OBJECT;
+				RETURN_IF_NULL(r);
 				result.data = r;
 				s.push(result);
 				if(op.type == OP_OBJECT) object::object_reap(p);
@@ -536,6 +564,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 			}
 			token_t result;
 			result.type = OP_OBJECT;
+			RETURN_IF_NULL(r);
 			result.data = r;
 			s.push(result);
 
@@ -588,7 +617,8 @@ cleanup_and_return_error:
 
 	return err;
 
-#undef POP_AND_RETURN_ON_ERROR
+#undef RETURN_IF_EMPTY
+#undef RETURN_IF_NULL
 #undef GET_OBJECT_POINTER
 }
 
@@ -722,25 +752,80 @@ evaluate_expression:
 #undef POP_ALL
 }
 
+void run_testcases_from_file(FILE* file, symboltable& st)
+{
+	char expr[128], expected_result[128], result[128];
+	int i = 0, p = 0;
+	
+#define REMOVE_TRAILING_NEWLINE(s) do { \
+if(s[strlen(s) - 1] == '\n') \
+	s[strlen(s) - 1] = '\0'; \
+} while(0)
+	
+	while(fgets(expr, sizeof(expr), file))
+	{
+		REMOVE_TRAILING_NEWLINE(expr);
+		
+		if(!strcmp(expr, "quit"))
+			break;
+		token_t t = evaluate_infix(expr, st);
+		fgets(expected_result, sizeof(expected_result), file);
+
+		REMOVE_TRAILING_NEWLINE(expected_result);
+
+		if(t.type == OP_OBJECT && t.data)
+		{
+			object::debug_string(t.data, result, sizeof(result));
+
+			if(!strcmp(expected_result, result))
+				++p, printf("test case [%s] *PASS*\n", expr);
+			else
+				printf("test case [%s] expected [%s] obtained [%s] *FAIL*\n", expr, expected_result, result);
+		}
+		++i;		
+	}
+	printf("total test cases=%d passed=%d failed=%d\n", i, p, i-p);
+
+#undef REMOVE_TRAILING_NEWLINE
+}
+
 const char prompt[] = "neo] ";
 
-int main()
+int main(int argv, char** argc)
 {
 	char buffer[128];
 	symboltable st;
 
-	printf("%s", prompt);
-	while(gets(buffer))
+	FILE* file = NULL;
+
+	if(argv == 2)
 	{
-		if(!strcmp(buffer, "quit"))
-			break;
-		
-		token_t t = evaluate_infix(buffer, st);
-		if(t.type == OP_OBJECT && t.data)		
-			t.data->print_object();
-		else
-			print_token(t);
-		printf("%s", prompt);
+		file = fopen(argc[1], "r");
+		if(file == NULL)
+		{
+			printf("cannot open file %s\n", argc[1]);
+			return -1;
+		}
+		run_testcases_from_file(file, st);
+		fclose(file);
 	}
+	else
+	{
+		printf("%s", prompt);
+		while(gets(buffer))
+		{
+			if(!strcmp(buffer, "quit"))
+				break;
+		
+			token_t t = evaluate_infix(buffer, st);
+			if(t.type == OP_OBJECT && t.data)		
+				t.data->print_object();
+			else
+				print_token(t);
+			printf("%s", prompt);
+		}
+		printf("\n");
+	}
+
 	return 0;
 }

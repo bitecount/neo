@@ -1,13 +1,42 @@
-An experimental interpreter:
+neo is an experimental interpreter
+(I may be the one ;)
 
-Try this!
+Features:
+* Dynamically typed, unused objects are automatically garbage collected.
+* Supports integer, floating point and string data types.
+* Lots of experiments to be done !!
 
->> a = 100
-Token: type=CONSTANT data=100
->> b = 50
-Token: type=CONSTANT data=50
->> c = (a+b)+(a*b)
-Token: type=CONSTANT data=5150
->> d = a | b
-Token: type=CONSTANT data=118
->> quit
+[ The following command starts the interpreter. ]
+
+$ ./neo
+neo] a = 100
+[100]
+neo] b = 50.5
+[50.50]
+neo] c = a + b
+[150.50]
+neo] d = 'Apple'
+['Apple'] length=5
+neo] d * 10
+token: type=INVALID error=Operator undefined
+neo] quit
+$
+
+[ Runs test cases in the file 'testcase' and reports status. ]
+
+$ ./neo testcase
+test case [1 + 2] *PASS*
+test case [3 - 5] *PASS*
+test case [6 * 4] *PASS*
+test case [50 / 2] *PASS*
+test case [100 % 6] *PASS*
+test case [(100 + (2 * 8) - 9 / 3)] *PASS*
+test case [(25 - (8 * 7) + 56)] expected [25] obtained [-87] *FAIL*
+test case [((100 + 8 * (2 + 3)) + 60) / 20 + 90] expected [100] obtained [844] *FAIL*
+test case [a = b = c = 10] *PASS*
+test case ['Apple' + ' ' + 'iCloud'] *PASS*
+test case [a = 'Orange'] *PASS*
+test case [a + ' Fruit'] *PASS*
+total test cases=12 passed=10 failed=2
+$
+

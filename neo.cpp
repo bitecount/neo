@@ -118,7 +118,7 @@ class object
 		void increment_refcount();
 		void decrement_refcount();
 
-		void print_object();
+		void print_object(bool verbose = false);
 		int get_object_count() { return object_count; }
 
 #define PROTOTYPE_OPERATOR_FUNCTION(op) \
@@ -159,6 +159,11 @@ class object
 		}
 
 		~object() {}
+
+		double object_to_double()
+		{
+			return (type == OBJECT_INTEGER) ? (double) intvalue : (type == OBJECT_FLOAT ? floatvalue : (double)0 );
+		}
 };
 
 typedef object* object_pointer_t;
@@ -207,25 +212,43 @@ void object::debug_string(const object* o, char* buffer, int bufferlength)
 	switch(o->type)
 	{
 		case OBJECT_STRING:
-		if(bufferlength >= (strlen((const char*) o->handle) + 1))
-			strcpy(buffer, (const char*) o->handle);
+		if(bufferlength)
+		{
+			strncpy(buffer, (const char*) o->handle, bufferlength);
+			buffer[bufferlength - 1] = '\0';
+		}
 		break;
 
 		case OBJECT_INTEGER:
-		sprintf(buffer, "%d", o->intvalue);
+		if(bufferlength)
+		{
+			snprintf(buffer, bufferlength, "%d", o->intvalue);
+			buffer[bufferlength - 1] = '\0';
+		}
+		break;
+
+		case OBJECT_FLOAT:
+		if(bufferlength)
+		{
+			snprintf(buffer, bufferlength, "%.2f", o->floatvalue);
+			buffer[bufferlength - 1] = '\0';
+		}
 		break;
 	}
 }
 
-void object::print_object()
+void object::print_object(bool verbose)
 {
-	printf("object @%p\n", this);
-	printf("type = %s reference_count = %d ", object_type_strings[this->type], this->refcount);
+	if(verbose)
+	{
+		printf("object@%p\n", this);
+		printf("type=%s reference_count=%d ", object_type_strings[this->type], this->refcount);
+	}
 	switch(this->type)
 	{
-		case OBJECT_INTEGER: printf("value = %d", this->intvalue); break;
-		case OBJECT_FLOAT:   printf("value = %.2f", this->floatvalue); break;
-		case OBJECT_STRING:  printf("value = '%s' length=%ld", (const char*)this->handle, strlen((const char*)this->handle)); break;
+		case OBJECT_INTEGER: printf("[%d]", this->intvalue); break;
+		case OBJECT_FLOAT:   printf("[%.2f]", this->floatvalue); break;
+		case OBJECT_STRING:  printf("['%s'] length=%ld", (const char*)this->handle, strlen((const char*)this->handle)); break;
 	}
 	printf("\n");
 }
@@ -241,31 +264,53 @@ object* operator op (object& lhs, object& rhs) \
 	return result; \
 }
 
-object* operator + (object& lhs, object& rhs)
+#define OPERATOR_INTEGER_FLOAT_FUNCTION(op) \
+object* operator op (object& lhs, object& rhs) \
+{ \
+	object* result = NULL; \
+	if(lhs.type == OBJECT_INTEGER && rhs.type == OBJECT_INTEGER) \
+		result = object::create_object(lhs.intvalue op rhs.intvalue); \
+	else if(#op == "+" && lhs.type == OBJECT_STRING && rhs.type == OBJECT_STRING) \
+	{ \
+		/*For efficiency, create the object using private constructor and set up type and handle.*/ \
+		result = new object(); \
+		result->type = OBJECT_STRING; \
+		result->handle = new char [strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1]; \
+		strcpy((char*) result->handle, (const char*)lhs.handle); \
+		strcpy(((char*) result->handle) + strlen((const char*)result->handle), (const char*)rhs.handle); \
+	} \
+	else if((lhs.type == OBJECT_INTEGER || lhs.type == OBJECT_FLOAT) && \
+		(rhs.type == OBJECT_INTEGER || rhs.type == OBJECT_FLOAT)) \
+		result = object::create_object(lhs.object_to_double() op rhs.object_to_double()); \
+\
+	return result; \
+}
+
+object* operator % (object& lhs, object& rhs)
 {
 	object* result = NULL;
 	if(lhs.type == OBJECT_INTEGER && rhs.type == OBJECT_INTEGER)
-		result = object::create_object(lhs.intvalue + rhs.intvalue);
-	else if(lhs.type == OBJECT_STRING && rhs.type == OBJECT_STRING)
+		result = object::create_object(lhs.intvalue % rhs.intvalue);
+	//% is undefined for floating point values in C. However neo defines % analogous to how it operates for an integer.
+	else if((lhs.type == OBJECT_INTEGER || lhs.type == OBJECT_FLOAT) &&
+		(rhs.type == OBJECT_INTEGER || rhs.type == OBJECT_FLOAT))
 	{
-		//For efficiency, create the object using private constructor and set up type and handle.
-		result = new object();
-		result->type = OBJECT_STRING;
-		result->handle = new char [strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1];
-		strcpy((char*) result->handle, (const char*)lhs.handle);
-		strcpy(((char*) result->handle) + strlen((const char*)result->handle), (const char*)rhs.handle);
+		double l = lhs.object_to_double(), r = rhs.object_to_double();
+		result = object::create_object(l - ((long)(l / r) * r));
 	}
-	return result;	
+
+	return result;
 }
 
-OPERATOR_FUNCTION(-)
-OPERATOR_FUNCTION(*)
-OPERATOR_FUNCTION(/)
-OPERATOR_FUNCTION(%)
+OPERATOR_INTEGER_FLOAT_FUNCTION(+)
+OPERATOR_INTEGER_FLOAT_FUNCTION(-)
+OPERATOR_INTEGER_FLOAT_FUNCTION(*)
+OPERATOR_INTEGER_FLOAT_FUNCTION(/)
 OPERATOR_FUNCTION(&)
 OPERATOR_FUNCTION(|)
 OPERATOR_FUNCTION(^)
 
+#undef OPERATOR_INTEGER_FLOAT_FUNCTION
 #undef OPERATOR_FUNCTION
 
 object* operator ~ (object& rhs)
@@ -388,29 +433,22 @@ const char* getnext_token(const char* istream, token_t* t)
 	}
 
 	//Look for an integer literal.
-	if((*istream >= '0' && *istream <= '9') || (*istream == '-'))
+	if(isdigit(*istream) || (*istream == '-' && isdigit(istream[1])))
 	{
-		int accumulate = 0;
-		bool negative = false;
-		const char* r = istream;
+		char * r = NULL;
+		double v = strtod(istream, &r);
+		int v_int = (int) v;
 
-		//Ignore negative sign followed by a character which isn't a digit.
-		if(r[0] == '-' && (r[1] < '0' || r[1] > '9'))
-			goto skip_reading_literal; 
-
-		if(r[0] == '-')
-		{
-			negative = true; 
-			++r;
-		}
 		t->type = OP_OBJECT;
-		while(*r >= '0' && *r <= '9')
-		{
-			accumulate = (accumulate * 10) + (*r - '0');
-			r++;
-		}	
-		t->data = object::create_object(negative ? -accumulate : accumulate);
-		istream = --r;
+		if(v - v_int == 0)
+			t->data = object::create_object(v_int);
+		else
+			t->data = object::create_object(v);
+
+		if(r == istream)
+			istream = istream + strlen(istream); 
+		else
+			istream = --r;
 	}
 
 	//Look for a string literal (enclosed in '').
@@ -588,9 +626,13 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		err.error_code = ERROR_BAD_EXPRESSION;
 	else
 	{
-		err = s.top(); //No errors detected during evaluation.
+		token_t res = s.top(); //No errors detected during evaluation.
 		s.pop();
-		return err;
+		object_pointer_t p = NULL;
+		GET_OBJECT_POINTER(res, p, true);
+		res.type = OP_OBJECT;
+		res.data = p;
+		return res;
 	}
 	
 cleanup_and_return_error:

@@ -3,8 +3,11 @@ neo is an experimental interpreter
 
 Features:
 * Dynamically typed, unused objects are automatically garbage collected.
-* Supports integer, floating point and string data types.
+* Supports integer, floating point, string and list data types.
 * Lots of experiments to be done !!
+
+[ Build ]
+$ g++ neo.cpp -o neo
 
 [ The following command starts the interpreter. ]
 
@@ -19,6 +22,14 @@ neo] d = 'Apple'
 ['Apple'] length=5
 neo] d * 10
 token: type=INVALID error=Operator undefined
+neo] a = { 10, 20, 30, 40 }
+{10,20,30,40 } length=4
+neo] b = { 90, 100, 'Apple' }
+{90,100,'Apple' length=5 } length=3
+neo] c = a + b
+{10,20,30,40,90,100,'Apple' length=5 } length=7
+neo] ~ 'orange'
+'ORANGE' length=6
 neo] quit
 $
 

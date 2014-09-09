@@ -28,8 +28,12 @@ typedef enum
 	OP_OPEN_SCOPE = 12,
 	OP_CLOSE_SCOPE = 13,
 
-	OP_INVALID = 14,
-	OP_EOF //Signifies the end of token stream.
+	OP_OPEN_BRACE = 14,
+	OP_CLOSE_BRACE = 15,
+	OP_SEPARATOR = 16,
+
+	OP_INVALID = 17,
+	OP_EOF //signifies the end of token stream.
 } operator_t;
 
 bool is_evaluation_operator(const operator_t& op)
@@ -56,11 +60,15 @@ const char* operator_strings[] =
 	"xor",
 	"not",
 
-	"CONSTANT",
+	"OBJECT",
 	"VARIABLE",
 
 	"(",
 	")",
+
+	"{",
+	"}",
+	",",
 
 	"INVALID",
 	"EOF"
@@ -79,27 +87,29 @@ typedef enum
 
 const char* error_codes[] =
 {
-	"Undefined variable used in expression",
-	"Unexpected token encountered",
-	"Assignment attempt to a constant",
-	"Unexpected end of expression",
-	"Improperly formed expression",
-	"Parsing error",
-	"Operator undefined"
+	"undefined variable used in expression",
+	"unexpected token encountered",
+	"assignment attempt to a constant",
+	"unexpected end of expression",
+	"improperly formed expression",
+	"parsing error",
+	"operator undefined"
 };
 
 typedef enum
 {
 	OBJECT_INTEGER = 0,
 	OBJECT_FLOAT,
-	OBJECT_STRING	
+	OBJECT_STRING,
+	OBJECT_LIST	
 } object_type_t;
 
 const char* object_type_strings[] =
 {
-	"Integer",
-	"Float",
-	"String"
+	"integer",
+	"float",
+	"string",
+	"list"
 };
 
 typedef void* object_handle_t;
@@ -107,20 +117,29 @@ typedef void* object_handle_t;
 class object
 {
 	public:
+		//objects are created in one of the following ways.
 		static object* create_object(int v);
 		static object* create_object(double v);
 		static object* create_object(const char* s);
+		static object* create_object(object_type_t t);
+		static object* clone_object(const object* o);
+
+		//list processing functions.
+		static void add_object_to_list(object* list, object* o);
+		static void add_to_list_from_lists(object* list, object* l1, object* l2);
 
 		static void object_reap(object* o);
 
 		static void debug_string(const object* o, char* buffer, int bufferlength);
 
+		//refcount determines when an object is deleted.
 		void increment_refcount();
 		void decrement_refcount();
 
-		void print_object(bool verbose = false);
+		void print_object(bool verbose = false, char tchar = '\n');
 		int get_object_count() { return object_count; }
 
+		//the following binary operators are defined for an object.
 #define PROTOTYPE_OPERATOR_FUNCTION(op) \
 		friend object* operator op (object& lhs, object& rhs);
 
@@ -135,7 +154,9 @@ class object
 
 #undef  PROTOTYPE_OPERATOR_FUNCTION
 
+		//the following unary operators are defined for an object.
 		friend object* operator ~ (object& rhs);
+
 	private:
 		object_type_t type;
 		union {
@@ -157,6 +178,18 @@ class object
 			strcpy((char*) this->handle, s);
 			++object_count;
 		}
+		object(object_type_t t) : type(t), refcount(0)
+		{
+			switch(t)
+			{
+				case OBJECT_INTEGER: intvalue = 0; break;
+				case OBJECT_FLOAT  : floatvalue = (double) 0; break;
+				case OBJECT_STRING :
+				case OBJECT_LIST   :
+					this->handle = new vector<object*> () ;
+			}
+			++object_count;
+		}
 
 		~object() {}
 
@@ -167,24 +200,100 @@ class object
 };
 
 typedef object* object_pointer_t;
+typedef vector <object_pointer_t> * object_list_pointer_t;
 
-//Initialize static members of the class object.
+//initialize static members of the class object.
 int object::object_count = 0;
 
 object* object::create_object(int v)
 {
+#ifdef DEBUG_NEO
+	object* x;
+	x = new object(v);
+	printf("creating ");
+	x->print_object(true, '\n');
+	return x;
+#else
 	return new object(v);
+#endif
 }
 
 object* object::create_object(double v)
 {
+#ifdef DEBUG_NEO
+	object* x;
+	x = new object(v);
+	printf("creating ");
+	x->print_object(true, '\n');
+	return x;
+#else
 	return new object(v);
+#endif
 }
 
 object* object::create_object(const char* s)
 {
+#ifdef DEBUG_NEO
+	object* x;
+	x = new object(s);
+	printf("creating ");
+	x->print_object(true, '\n');
+	return x;
+#else
 	return new object(s);
+#endif
 }
+
+object* object::create_object(object_type_t t)
+{
+#ifdef DEBUG_NEO
+	object* x;
+	x = new object(t);
+	printf("creating ");
+	x->print_object(true, '\n');
+	return x;
+#else
+	return new object(t);
+#endif
+}
+
+object* object::clone_object(const object* o)
+{
+	switch(o->type)
+	{
+		case OBJECT_INTEGER: return object::create_object(o->intvalue);
+		case OBJECT_FLOAT  : return object::create_object(o->floatvalue);
+		case OBJECT_STRING : return object::create_object((const char*) o->handle);
+	}
+	return NULL;
+}
+
+//begin list processing functions.
+void object::add_object_to_list(object* list, object* o)
+{
+	if(list->type == OBJECT_LIST)
+	{
+		((vector <object*> *) list->handle)->push_back(o);
+	}
+}
+
+void object::add_to_list_from_lists(object* list, object* l1, object* l2)
+{
+	if(list->type == OBJECT_LIST && l1->type == OBJECT_LIST && l2->type == OBJECT_LIST)
+	{
+		object_list_pointer_t vdst = (object_list_pointer_t) list->handle;
+		object_list_pointer_t src1 = (object_list_pointer_t) l1->handle;
+		object_list_pointer_t src2 = (object_list_pointer_t) l2->handle;
+
+		int i;
+		for(i = 0; i < src1->size(); ++i)
+			vdst->push_back( object::clone_object((*src1)[i]) );
+		for(i = 0; i < src2->size(); ++i)
+			vdst->push_back( object::clone_object((*src2)[i]) );
+	}
+}
+
+//end list processing functions.
 
 void object::increment_refcount()
 {
@@ -201,8 +310,22 @@ void object::object_reap(object* o)
 {
 	if(o->refcount == 0)
 	{
+#ifdef DEBUG_NEO
+		printf("destroying ");
+		o->print_object(true, '\n');
+#endif
 		if(o->type == OBJECT_STRING)
 			delete [] ((char*) o->handle);
+		else if(o->type == OBJECT_LIST)
+		{
+			vector <object*> * v = (vector <object*> *) o->handle;
+			if(v)
+			{
+				for(int i = 0; i < v->size(); ++i)
+					delete (*v)[i];
+			}
+			delete v;
+		}
 		delete o;
 	}
 }
@@ -237,20 +360,30 @@ void object::debug_string(const object* o, char* buffer, int bufferlength)
 	}
 }
 
-void object::print_object(bool verbose)
+void object::print_object(bool verbose, char tchar)
 {
 	if(verbose)
 	{
-		printf("object@%p\n", this);
-		printf("type=%s reference_count=%d ", object_type_strings[this->type], this->refcount);
+		printf("object@ %p type=%s reference_count=%d ", this, object_type_strings[this->type], this->refcount);
 	}
 	switch(this->type)
 	{
-		case OBJECT_INTEGER: printf("[%d]", this->intvalue); break;
-		case OBJECT_FLOAT:   printf("[%.2f]", this->floatvalue); break;
-		case OBJECT_STRING:  printf("['%s'] length=%ld", (const char*)this->handle, strlen((const char*)this->handle)); break;
+		case OBJECT_INTEGER: printf("%d", this->intvalue); break;
+		case OBJECT_FLOAT:   printf("%.2f", this->floatvalue); break;
+		case OBJECT_STRING:  printf("'%s' length=%ld", (const char*)this->handle, strlen((const char*)this->handle)); break;
+		case OBJECT_LIST:
+			printf("{");
+			vector <object* > * v = (vector <object* > *) this->handle;
+			size_t vs = v->size();
+			for(int i = 0; i < vs; ++i)
+			{
+				char t = (i == (vs - 1)) ? ' ' : ',' ;
+				((*v)[i])->print_object(false, t);
+			}
+			printf("} length=%ld", vs);
+			break;
 	}
-	printf("\n");
+	printf("%c", tchar);
 }
 
 #define OPERATOR_FUNCTION(op) \
@@ -272,12 +405,18 @@ object* operator op (object& lhs, object& rhs) \
 		result = object::create_object(lhs.intvalue op rhs.intvalue); \
 	else if(#op == "+" && lhs.type == OBJECT_STRING && rhs.type == OBJECT_STRING) \
 	{ \
-		/*For efficiency, create the object using private constructor and set up type and handle.*/ \
+		/*for efficiency, create the object using private constructor and set up type and handle.*/ \
 		result = new object(); \
 		result->type = OBJECT_STRING; \
 		result->handle = new char [strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1]; \
 		strcpy((char*) result->handle, (const char*)lhs.handle); \
 		strcpy(((char*) result->handle) + strlen((const char*)result->handle), (const char*)rhs.handle); \
+	} \
+	else if(#op == "+" && lhs.type == OBJECT_LIST && rhs.type == OBJECT_LIST) \
+	{ \
+		/*create a new list, from the elements of lhs and rhs lists and return the new list.*/ \
+		result = object::create_object(OBJECT_LIST); \
+		object::add_to_list_from_lists(result, &lhs, &rhs); \
 	} \
 	else if((lhs.type == OBJECT_INTEGER || lhs.type == OBJECT_FLOAT) && \
 		(rhs.type == OBJECT_INTEGER || rhs.type == OBJECT_FLOAT)) \
@@ -319,6 +458,18 @@ object* operator ~ (object& rhs)
 	if(rhs.type == OBJECT_INTEGER)
 	{
 		result = object::create_object(~rhs.intvalue);
+	} else if(rhs.type == OBJECT_STRING)
+	{
+		result = new object();
+		result->type = OBJECT_STRING;
+		result->handle = new char [strlen((const char*) rhs.handle) + 1];
+		int i;
+		for(i = 0; i < strlen((const char*) rhs.handle); ++i)
+		{
+			char c = *(((const char*) rhs.handle) + i);
+			((char*) result->handle)[i] = isupper(c) ? tolower(c) : toupper(c);
+		}
+		((char*) result->handle)[i] = '\0';		
 	}
 	return result;
 }
@@ -329,12 +480,12 @@ class token
 #define VARIABLE_NAME_LENGTH (31)
 	operator_t type;
 	union {
-		object_pointer_t data; 			//valid only for OP_OBJECT.
+		object_pointer_t objectp; 		//valid only for OP_OBJECT.
 		char varname[VARIABLE_NAME_LENGTH + 1]; //valid only for OP_VARIABLE.
 		int error_code; 			//valid only for OP_INVALID.
 	};
 
-	token() { data = NULL; }
+	token() { objectp = NULL; }
 #undef VARIABLE_NAME_LENGTH
 };
 typedef token token_t;
@@ -344,17 +495,17 @@ void print_token(const token_t& t)
 	switch(t.type)
 	{
 		case OP_OBJECT:
-			printf("token: type=%s data=%p\n", operator_strings[t.type], t.data);
+			printf("token: type=%s p=%p\n", operator_strings[t.type], t.objectp);
 			break;
 		case OP_VARIABLE:
-			printf("token: type=%s varname=%s\n", operator_strings[t.type], t.varname);
+			printf("token: type=%s reference=%s\n", operator_strings[t.type], t.varname);
 			break;
 		case OP_INVALID:
 			printf("token: type=%s error=%s\n", operator_strings[t.type], error_codes[t.error_code]);
 			break;
 		default:
 			printf("token: type=%s\n", operator_strings[t.type]);
-	} 
+	}
 }
 
 class symboltable
@@ -402,7 +553,7 @@ void symboltable::print_all_symbols()
 Read one token from istream and populate the token structure pointed by t.
 Advance and return the incoming pointer so that it points to the next token in the stream.
 */
-const char* getnext_token(const char* istream, token_t* t)
+const char* get_next_token(const char* istream, token_t* t)
 {
 	if(istream == NULL) return NULL;
 	t->type = OP_EOF;
@@ -430,6 +581,9 @@ const char* getnext_token(const char* istream, token_t* t)
 		case '~' : t->type = OP_BITWISE_NOT; break;
 		case '(' : t->type = OP_OPEN_SCOPE; break;
 		case ')' : t->type = OP_CLOSE_SCOPE; break;
+		case '{' : t->type = OP_OPEN_BRACE; break;
+		case '}' : t->type = OP_CLOSE_BRACE; break;
+		case ',' : t->type = OP_SEPARATOR; break;
 	}
 
 	//Look for an integer literal.
@@ -441,9 +595,9 @@ const char* getnext_token(const char* istream, token_t* t)
 
 		t->type = OP_OBJECT;
 		if(v - v_int == 0)
-			t->data = object::create_object(v_int);
+			t->objectp = object::create_object(v_int);
 		else
-			t->data = object::create_object(v);
+			t->objectp = object::create_object(v);
 
 		if(r == istream)
 			istream = istream + strlen(istream); 
@@ -468,7 +622,7 @@ const char* getnext_token(const char* istream, token_t* t)
 		{
 			buffer[k] = '\0';
 			t->type = OP_OBJECT;
-			t->data = object::create_object((const char*) buffer);
+			t->objectp = object::create_object((const char*) buffer);
 			istream = r;
 		}
 	}
@@ -508,7 +662,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		} \
 	} \
 	else if(token.type == OP_OBJECT) \
-		object_pointer = token.data; \
+		object_pointer = token.objectp; \
 } while(0)
 
 #define RETURN_IF_NULL(x) do { \
@@ -552,7 +706,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 				token_t result;
 				result.type = OP_OBJECT;
 				RETURN_IF_NULL(r);
-				result.data = r;
+				result.objectp = r;
 				s.push(result);
 				if(op.type == OP_OBJECT) object::object_reap(p);
 				continue;
@@ -603,7 +757,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 			token_t result;
 			result.type = OP_OBJECT;
 			RETURN_IF_NULL(r);
-			result.data = r;
+			result.objectp = r;
 			s.push(result);
 
 			//If objects used in the expression are constants, we can release them.
@@ -631,7 +785,7 @@ token_t evaluate_postfix(const vector< token_t > &v, stack< token_t> &s, symbolt
 		object_pointer_t p = NULL;
 		GET_OBJECT_POINTER(res, p, true);
 		res.type = OP_OBJECT;
-		res.data = p;
+		res.objectp = p;
 		return res;
 	}
 	
@@ -751,7 +905,7 @@ token_t evaluate_infix(const char* p, symboltable& st)
 
 	while(p)
 	{
-		q = getnext_token(p, &t);
+		q = get_next_token(p, &t);
 		
 		switch(t.type)
 		{
@@ -759,6 +913,27 @@ token_t evaluate_infix(const char* p, symboltable& st)
 			case OP_VARIABLE:
 				v.push_back(t);
 				break;
+
+			//incoming opening brace. read the token stream until OP_CLOSE_BRACE is received, and create a list
+			//object if successful. otherwise report error.
+			case OP_OPEN_BRACE:
+			{
+				object_pointer_t list = object::create_object(OBJECT_LIST);
+				do
+				{
+					q = get_next_token(q, &t);
+					switch(t.type)
+					{
+						case OP_OBJECT: object::add_object_to_list(list, t.objectp); break;
+						case OP_SEPARATOR: break;
+						case OP_CLOSE_BRACE:
+							t.type = OP_OBJECT;
+							t.objectp = list;
+							v.push_back(t);
+							goto last_statement_main_loop;
+					}
+				} while(q);
+			}
 			case OP_ADD:
 			case OP_SUBTRACT:
 			case OP_MULTIPLY:
@@ -769,19 +944,20 @@ token_t evaluate_infix(const char* p, symboltable& st)
 			case OP_BITWISE_OR:
 			case OP_BITWISE_XOR:
 			case OP_BITWISE_NOT:
-			//Incoming operator; pop operators from the stack which are of higher priority, put them into the vector and then push
+			//incoming operator; pop operators from the stack which are of higher priority, put them into the vector and then push
 			//this element into the stack.
 				POP_HIGH_PRIORITY_AND_POPULATE_VECTOR;
 				s.push(t); break;
 			case OP_OPEN_SCOPE:
 				s.push(t); break;
 			case OP_CLOSE_SCOPE:
-			//Pop operators from the stack and put them into the vector until an OP_OPEN_SCOPE type is removed.
+			//pop operators from the stack and put them into the vector until an OP_OPEN_SCOPE type is removed.
 				POP_AND_POPULATE_VECTOR;
 				break;
 			case OP_EOF: goto evaluate_expression;
 			case OP_INVALID: return t;
 		}
+last_statement_main_loop:
 		p = q;
 	}
 evaluate_expression:
@@ -815,9 +991,9 @@ if(s[strlen(s) - 1] == '\n') \
 
 		REMOVE_TRAILING_NEWLINE(expected_result);
 
-		if(t.type == OP_OBJECT && t.data)
+		if(t.type == OP_OBJECT && t.objectp)
 		{
-			object::debug_string(t.data, result, sizeof(result));
+			object::debug_string(t.objectp, result, sizeof(result));
 
 			if(!strcmp(expected_result, result))
 				++p, printf("test case [%s] *PASS*\n", expr);
@@ -860,8 +1036,12 @@ int main(int argv, char** argc)
 				break;
 		
 			token_t t = evaluate_infix(buffer, st);
-			if(t.type == OP_OBJECT && t.data)		
-				t.data->print_object();
+			if(t.type == OP_OBJECT && t.objectp)	
+#ifdef DEBUG_NEO
+				t.objectp->print_object(true);
+#else	
+				t.objectp->print_object();
+#endif
 			else
 				print_token(t);
 			printf("%s", prompt);

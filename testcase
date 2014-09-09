@@ -22,5 +22,11 @@ a = 'Orange'
 Orange
 a + ' Fruit'
 Orange Fruit
+~ 'tESTCASE fOR sTRING'
+Testcase For String
+0x10 + 84
+100
+10.25 + 25.7
+35.95
 quit
 

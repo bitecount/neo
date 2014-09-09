@@ -99,9 +99,10 @@ const char* error_codes[] =
 typedef enum
 {
 	OBJECT_INTEGER = 0,
-	OBJECT_FLOAT,
-	OBJECT_STRING,
-	OBJECT_LIST	
+	OBJECT_FLOAT = 1,
+	OBJECT_STRING = 2,
+	OBJECT_LIST = 3,
+	OBJECT_TYPE_COUNT = 4
 } object_type_t;
 
 const char* object_type_strings[] =
@@ -109,7 +110,8 @@ const char* object_type_strings[] =
 	"integer",
 	"float",
 	"string",
-	"list"
+	"list",
+	"dummy"
 };
 
 typedef void* object_handle_t;
@@ -126,18 +128,18 @@ class object
 
 		//list processing functions.
 		static void add_object_to_list(object* list, object* o);
-		static void add_to_list_from_lists(object* list, object* l1, object* l2);
+		static void clone_and_add_to_list(object* list, object* l);
 
 		static void object_reap(object* o);
 
 		static void debug_string(const object* o, char* buffer, int bufferlength);
+		static void print_memory_stats();
 
 		//refcount determines when an object is deleted.
 		void increment_refcount();
 		void decrement_refcount();
 
 		void print_object(bool verbose = false, char tchar = '\n');
-		int get_object_count() { return object_count; }
 
 		//the following binary operators are defined for an object.
 #define PROTOTYPE_OPERATOR_FUNCTION(op) \
@@ -166,17 +168,21 @@ class object
 		};
 		int refcount;
 
-		static int object_count;
+		static int object_count[OBJECT_TYPE_COUNT];
+		static size_t object_memory_alloc;
+		static size_t object_memory_freed;
 
-		object() : refcount(0) { ++object_count; }
+		object() : refcount(0) { ++object_count[OBJECT_STRING]; }
 
-		object(int v) : type(OBJECT_INTEGER), intvalue(v), refcount(0) { ++object_count; }
-		object(double v) : type(OBJECT_FLOAT), floatvalue(v), refcount(0) { ++object_count; }
+		object(int v) : type(OBJECT_INTEGER), intvalue(v), refcount(0) { ++object_count[OBJECT_INTEGER]; }
+		object(double v) : type(OBJECT_FLOAT), floatvalue(v), refcount(0) { ++object_count[OBJECT_FLOAT]; }
 		object(const char* s) : type(OBJECT_STRING), refcount(0)
 		{
-			this->handle = new char[ strlen(s) + 1 ];
+			size_t n = strlen(s) + 1;
+			this->handle = new char[ n ];
 			strcpy((char*) this->handle, s);
-			++object_count;
+			++object_count[OBJECT_STRING];
+			object_memory_alloc += n;
 		}
 		object(object_type_t t) : type(t), refcount(0)
 		{
@@ -188,7 +194,7 @@ class object
 				case OBJECT_LIST   :
 					this->handle = new vector<object*> () ;
 			}
-			++object_count;
+			++object_count[t];
 		}
 
 		~object() {}
@@ -203,7 +209,9 @@ typedef object* object_pointer_t;
 typedef vector <object_pointer_t> * object_list_pointer_t;
 
 //initialize static members of the class object.
-int object::object_count = 0;
+int object::object_count[OBJECT_TYPE_COUNT] = { 0 };
+size_t object::object_memory_alloc = 0;
+size_t object::object_memory_freed = 0;
 
 object* object::create_object(int v)
 {
@@ -264,6 +272,21 @@ object* object::clone_object(const object* o)
 		case OBJECT_INTEGER: return object::create_object(o->intvalue);
 		case OBJECT_FLOAT  : return object::create_object(o->floatvalue);
 		case OBJECT_STRING : return object::create_object((const char*) o->handle);
+		case OBJECT_LIST   : 
+		{
+			//to clone a list, create a new list and add objects to the new list by cloning each element of the
+			//old list.
+			object * newobject = object::create_object(OBJECT_LIST);
+			newobject->handle = new vector <object_pointer_t> ();
+			object_list_pointer_t dst = (object_list_pointer_t) newobject->handle;
+
+			object_list_pointer_t src = (object_list_pointer_t) o->handle;
+			
+			for(int i = 0; i < src->size(); ++i)
+				dst->push_back(clone_object((*src)[i]));
+
+			return newobject;
+		}
 	}
 	return NULL;
 }
@@ -277,20 +300,18 @@ void object::add_object_to_list(object* list, object* o)
 	}
 }
 
-void object::add_to_list_from_lists(object* list, object* l1, object* l2)
+void object::clone_and_add_to_list(object* list, object* l)
 {
-	if(list->type == OBJECT_LIST && l1->type == OBJECT_LIST && l2->type == OBJECT_LIST)
+	if(list->type == OBJECT_LIST && l->type == OBJECT_LIST)
 	{
-		object_list_pointer_t vdst = (object_list_pointer_t) list->handle;
-		object_list_pointer_t src1 = (object_list_pointer_t) l1->handle;
-		object_list_pointer_t src2 = (object_list_pointer_t) l2->handle;
+		object_list_pointer_t dst = (object_list_pointer_t) list->handle;
+		object_list_pointer_t src = (object_list_pointer_t) l->handle;
 
-		int i;
-		for(i = 0; i < src1->size(); ++i)
-			vdst->push_back( object::clone_object((*src1)[i]) );
-		for(i = 0; i < src2->size(); ++i)
-			vdst->push_back( object::clone_object((*src2)[i]) );
+		for(int i = 0; i < src->size(); ++i)
+			dst->push_back( object::clone_object((*src)[i]) );
 	}
+	else if(list->type == OBJECT_LIST)
+		((object_list_pointer_t) list->handle)->push_back( object::clone_object(l) );
 }
 
 //end list processing functions.
@@ -315,7 +336,10 @@ void object::object_reap(object* o)
 		o->print_object(true, '\n');
 #endif
 		if(o->type == OBJECT_STRING)
+		{
+			object_memory_freed += strlen((const char*) o->handle) + 1;
 			delete [] ((char*) o->handle);
+		}
 		else if(o->type == OBJECT_LIST)
 		{
 			vector <object*> * v = (vector <object*> *) o->handle;
@@ -358,6 +382,14 @@ void object::debug_string(const object* o, char* buffer, int bufferlength)
 		}
 		break;
 	}
+}
+
+void object::print_memory_stats()
+{
+	printf("total memory allocated=%ld bytes, freed=%ld bytes, inuse=%ld bytes\n", object_memory_alloc, object_memory_freed,
+	object_memory_alloc - object_memory_freed);
+	for(int i = OBJECT_INTEGER; i < OBJECT_TYPE_COUNT; ++i)
+		printf("total objects of type %-10s=%10d\n", object_type_strings[i], object_count[i]);
 }
 
 void object::print_object(bool verbose, char tchar)
@@ -408,15 +440,38 @@ object* operator op (object& lhs, object& rhs) \
 		/*for efficiency, create the object using private constructor and set up type and handle.*/ \
 		result = new object(); \
 		result->type = OBJECT_STRING; \
-		result->handle = new char [strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1]; \
+		size_t n = strlen((const char*)lhs.handle) + strlen((const char*)rhs.handle) + 1; \
+		result->handle = new char [ n ]; \
 		strcpy((char*) result->handle, (const char*)lhs.handle); \
 		strcpy(((char*) result->handle) + strlen((const char*)result->handle), (const char*)rhs.handle); \
+		object::object_memory_alloc += n; \
 	} \
-	else if(#op == "+" && lhs.type == OBJECT_LIST && rhs.type == OBJECT_LIST) \
+	else if(#op == "+" && (lhs.type == OBJECT_LIST || rhs.type == OBJECT_LIST)) \
 	{ \
-		/*create a new list, from the elements of lhs and rhs lists and return the new list.*/ \
-		result = object::create_object(OBJECT_LIST); \
-		object::add_to_list_from_lists(result, &lhs, &rhs); \
+		object& list  = (lhs.type == OBJECT_LIST ? lhs : rhs); \
+		object& other = (lhs.type == OBJECT_LIST ? rhs : lhs); \
+\
+		if(lhs.type == OBJECT_LIST && rhs.type == OBJECT_LIST) \
+		{ \
+			/*create a new list, from the elements of lhs and rhs lists and return the new list.*/ \
+			result = object::create_object(OBJECT_LIST); \
+			object::clone_and_add_to_list(result, &lhs); \
+			object::clone_and_add_to_list(result, &rhs); \
+		} \
+		else \
+		{ \
+			result = object::create_object(OBJECT_LIST); \
+			if(&lhs == &other) \
+			{ \
+				object::clone_and_add_to_list(result, &other); \
+				object::clone_and_add_to_list(result, &list); \
+			} \
+			else \
+			{ \
+				object::clone_and_add_to_list(result, &list); \
+				object::clone_and_add_to_list(result, &other); \
+			} \
+		} \
 	} \
 	else if((lhs.type == OBJECT_INTEGER || lhs.type == OBJECT_FLOAT) && \
 		(rhs.type == OBJECT_INTEGER || rhs.type == OBJECT_FLOAT)) \
@@ -1032,10 +1087,15 @@ int main(int argv, char** argc)
 		printf("%s", prompt);
 		while(gets(buffer))
 		{
+			token_t t;
 			if(!strcmp(buffer, "quit"))
 				break;
-		
-			token_t t = evaluate_infix(buffer, st);
+			if(!strcmp(buffer, "m"))
+			{
+				object::print_memory_stats();
+				goto skip_to_last;
+			}
+			t = evaluate_infix(buffer, st);
 			if(t.type == OP_OBJECT && t.objectp)	
 #ifdef DEBUG_NEO
 				t.objectp->print_object(true);
@@ -1044,6 +1104,7 @@ int main(int argv, char** argc)
 #endif
 			else
 				print_token(t);
+skip_to_last:
 			printf("%s", prompt);
 		}
 		printf("\n");
